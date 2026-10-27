@@ -11,6 +11,99 @@ services:
       - ./postgres-keycloak-data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
+
+  crm_db:
+    image: postgres:14
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_wal_senders=10", "-c", "max_replication_slots=10"]
+    environment:
+      POSTGRES_DB: crm_db
+      POSTGRES_USER: crm_user
+      POSTGRES_PASSWORD: crm_password
+    volumes:
+      - ./crm_db/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5434:5432"
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  debezium:
+    image: debezium/connect:2.4
+    depends_on:
+      - kafka
+      - crm_db
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: my_connect_configs
+      OFFSET_STORAGE_TOPIC: my_connect_offsets
+      STATUS_STORAGE_TOPIC: my_connect_statuses
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+  debezium-init:
+    image: curlimages/curl:8.7.1
+    depends_on:
+      - debezium
+    volumes:
+      - ./debezium/crm-connector.json:/tmp/crm-connector.json:ro
+    entrypoint:
+      - "/bin/sh"
+      - "-c"
+      - |
+        echo "Waiting for Debezium connect service to be ready..."
+        while ! curl -s -f http://debezium:8083/connectors > /dev/null; do
+          sleep 3
+        done
+        echo "Debezium is UP. Registering crm-postgres-connector..."
+        curl -s -X POST http://debezium:8083/connectors \
+          -H "Content-Type: application/json" \
+          -d @/tmp/crm-connector.json || true
+        echo "Connector registration requested."
+    restart: "no"
+
+  openldap:
+    image: osixia/openldap:1.5.0
+    environment:
+      LDAP_ORGANISATION: "Example Inc."
+      LDAP_DOMAIN: "example.com"
+      LDAP_ADMIN_PASSWORD: "adminpassword"
+      LDAP_BASE_DN: "dc=example,dc=com"
+      LDAP_REMOVE_CONFIG_AFTER_SETUP: "false"
+    volumes:
+      - ./ldap/config.ldif:/tmp/config.ldif:ro
+    ports:
+      - "389:389"
+      - "636:636"
+
   keycloak:
     image: quay.io/keycloak/keycloak:21.1
     environment:
@@ -29,6 +122,77 @@ services:
       - "8080:8080"
     depends_on:
       - keycloak_db
+      - openldap
+
+  minio:
+    build:
+      context: ./minio-mock
+      dockerfile: Dockerfile
+    ports:
+      - "9001:9000"
+    volumes:
+      - minio-data:/data
+
+  cdn:
+    image: nginx:alpine
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - minio
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ./clickhouse/init:/docker-entrypoint-initdb.d
+    environment:
+      CLICKHOUSE_DB: bionicpro_analytics
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    depends_on:
+      - kafka
+
+  reports-api:
+    build:
+      context: ./reports-api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      KEYCLOAK_ISSUER_URI: http://keycloak:8080/realms/reports-realm
+      KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/reports-realm/protocol/openid-connect/certs
+      CLICKHOUSE_URL: http://clickhouse:8123/bionicpro_analytics
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadminpassword
+      S3_BUCKET: bionicpro-reports
+      CDN_BASE_URL: http://localhost:8082/bionicpro-reports
+    depends_on:
+      - keycloak
+      - clickhouse
+      - minio
+
+  bionicpro-auth:
+    build:
+      context: ./bionicpro-auth
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_PUBLIC_URL: http://localhost:8080
+      KEYCLOAK_REALM: reports-realm
+      KEYCLOAK_CLIENT_ID: bionicpro-auth
+      KEYCLOAK_CLIENT_SECRET: bionicpro-auth-secret
+      REPORTS_API_URL: http://reports-api:8000
+      BIONICPRO_SESSION_TIMEOUT_SECONDS: 1800
+    depends_on:
+      - keycloak
+      - reports-api
+
   frontend:
     build:
       context: ./frontend
@@ -36,7 +200,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      REACT_APP_API_URL: http://localhost:8000
-      REACT_APP_KEYCLOAK_URL: http://localhost:8080
-      REACT_APP_KEYCLOAK_REALM: reports-realm
-      REACT_APP_KEYCLOAK_CLIENT_ID: reports-frontend
+      REACT_APP_API_URL: http://localhost:8081/api
+      REACT_APP_AUTH_URL: http://localhost:8081
+    depends_on:
+      - bionicpro-auth
+
+volumes:
+  minio-data:
