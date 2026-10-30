@@ -188,7 +188,7 @@ bionicpro-reports/
 | **openldap**       | `389 / 636`    | OpenLDAP                          | Локальный каталог пользователей и групп зарубежного представительства   |
 | **reports-api**    | `8000`         | Java (Spring Boot)                | Ресурсный сервис отчётов, авторизация JWT, интеграция с ClickHouse и S3 |
 | **clickhouse**     | `8123 / 9000`  | ClickHouse 23.8                   | Аналитическая СУБД: KafkaEngine, MaterializedView, витрина отчётов      |
-| **minio**          | `9001 / 9002`  | MinIO S3                          | Объектное хранилище готовых отчётов пользователей                       |
+| **minio**          | только внутр. сеть | MinIO S3                          | Объектное хранилище готовых отчётов пользователей                       |
 | **cdn**            | `8082`         | Nginx Reverse Proxy               | Граничный reverse proxy с кешированием статических отчётов из S3        |
 | **airflow**        | -              | Apache Airflow                    | Регулярный ETL-пайплайн суточной агрегации телеметрии                   |
 
@@ -365,19 +365,19 @@ curl "http://localhost:8123/?query=SELECT+username,prosthetic_model,report_date,
 
 #### 8. Проверка объектного хранилища S3 (MinIO) и CDN (Nginx):
 
+MinIO не публикуется на хост, а CDN отдаёт объект только по подписанной ссылке (`nginx secure_link`).
+Ссылку выдаёт `reports-api` в поле `cdnUrl` после проверки JWT и того, что отчёт принадлежит владельцу токена.
+Подпись `md5=base64url(md5("<expires><uri> <CDN_SECURE_LINK_SECRET>"))` действует `CDN_LINK_TTL_SECONDS` (300 с).
+
 ```bash
-# 1. Загрузка тестового отчёта в S3
-curl -X PUT "http://localhost:9001/bionicpro-reports/reports/testuser/report_2026-10-01_2026-10-16.json" \
-  -H "Content-Type: application/json" \
-  -d '{"username":"testuser","model":"Hand Elite v2","status":"OK"}'
+# 1. Прямой путь без подписи (в том числе чужой) -> 403 Forbidden
+curl -i "http://localhost:8082/bionicpro-reports/reports/prothetic1/report_2026-10-01_2026-10-16.json"
 
-# 2. Первый запрос через CDN (Cache MISS)
-curl -i "http://localhost:8082/bionicpro-reports/reports/testuser/report_2026-10-01_2026-10-16.json"
-# В заголовках: X-Cache-Status: MISS
+# 2. Подписанная ссылка из ответа GET /reports (поле cdnUrl) -> 200, X-Cache-Status: MISS, затем HIT
+curl -i "<cdnUrl из ответа reports-api>"
 
-# 3. Повторный запрос через CDN (Cache HIT)
-curl -i "http://localhost:8082/bionicpro-reports/reports/testuser/report_2026-10-01_2026-10-16.json"
-# В заголовках: X-Cache-Status: HIT
+# 3. Подмена username в пути подписанной ссылки -> 403 (подпись не совпадает с путём)
+# 4. Ссылка после истечения expires -> 410 Gone
 ```
 
 #### 9. Проверка пользователей в OpenLDAP:

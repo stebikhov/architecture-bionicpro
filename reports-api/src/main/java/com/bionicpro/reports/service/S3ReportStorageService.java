@@ -52,6 +52,12 @@ public class S3ReportStorageService {
     @Value("${cdn.base-url:http://localhost:8082/bionicpro-reports}")
     private String cdnBaseUrl;
 
+    @Value("${cdn.secure-link-secret:change-me-cdn-secret}")
+    private String cdnSecureLinkSecret;
+
+    @Value("${cdn.link-ttl-seconds:300}")
+    private long cdnLinkTtlSeconds;
+
     public S3ReportStorageService(RestTemplateBuilder restTemplateBuilder) {
         this.restTemplate = restTemplateBuilder.build();
     }
@@ -65,10 +71,22 @@ public class S3ReportStorageService {
     }
 
     /**
-     * Build public CDN URL for the cached report.
+     * Build short-lived signed CDN URL for the cached report (nginx secure_link).
+     * Called only after the JWT owner check, so the link is issued for the caller's own object only.
+     * Signature: base64url(md5("{expires}{uri} {secret}")), where uri is the request path on the CDN.
      */
     public String buildCdnUrl(String s3Key) {
-        return String.format("%s/%s", cdnBaseUrl, s3Key);
+        String objectUrl = String.format("%s/%s", cdnBaseUrl, s3Key);
+        String uri = java.net.URI.create(objectUrl).getRawPath();
+        long expires = System.currentTimeMillis() / 1000 + cdnLinkTtlSeconds;
+        try {
+            byte[] md5 = MessageDigest.getInstance("MD5")
+                    .digest((expires + uri + " " + cdnSecureLinkSecret).getBytes(StandardCharsets.UTF_8));
+            String signature = Base64.getUrlEncoder().withoutPadding().encodeToString(md5);
+            return String.format("%s?md5=%s&expires=%d", objectUrl, signature, expires);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to sign CDN URL", e);
+        }
     }
 
     /**
