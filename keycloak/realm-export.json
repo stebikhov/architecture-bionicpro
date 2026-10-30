@@ -1,6 +1,124 @@
 {
     "realm": "reports-realm",
     "enabled": true,
+    "accessTokenLifespan": 120,
+    "ssoSessionIdleTimeout": 1800,
+    "ssoSessionMaxLifespan": 36000,
+    "offlineSessionIdleTimeout": 2592000,
+    "clientSessionIdleTimeout": 1800,
+    "clientSessionMaxLifespan": 36000,
+    "requiredCredentials": [
+      "password"
+    ],
+    "otpPolicyType": "totp",
+    "otpPolicyAlgorithm": "HmacSHA1",
+    "otpPolicyInitialCounter": 0,
+    "otpPolicyDigits": 6,
+    "otpPolicyLookAheadWindow": 1,
+    "otpPolicyPeriod": 30,
+    "otpSupportedApplications": [
+      "FreeOTP",
+      "Google Authenticator"
+    ],
+    "browserFlow": "browser",
+    "authenticationFlows": [
+      {
+        "id": "flow-browser",
+        "alias": "browser",
+        "description": "Browser based authentication with mandatory OTP",
+        "providerId": "basic-flow",
+        "topLevel": true,
+        "builtIn": false,
+        "authenticationExecutions": [
+          {
+            "authenticator": "auth-cookie",
+            "requirement": "ALTERNATIVE",
+            "priority": 10,
+            "userSetupAllowed": false,
+            "authenticatorFlow": false
+          },
+          {
+            "authenticator": "auth-spnego",
+            "requirement": "DISABLED",
+            "priority": 20,
+            "userSetupAllowed": false,
+            "authenticatorFlow": false
+          },
+          {
+            "authenticator": "identity-provider-redirector",
+            "requirement": "ALTERNATIVE",
+            "priority": 25,
+            "userSetupAllowed": false,
+            "authenticatorFlow": false
+          },
+          {
+            "requirement": "ALTERNATIVE",
+            "priority": 30,
+            "flowAlias": "forms",
+            "userSetupAllowed": false,
+            "authenticatorFlow": true
+          }
+        ]
+      },
+      {
+        "id": "flow-forms",
+        "alias": "forms",
+        "description": "Username, password and mandatory OTP forms",
+        "providerId": "basic-flow",
+        "topLevel": false,
+        "builtIn": false,
+        "authenticationExecutions": [
+          {
+            "authenticator": "auth-username-password-form",
+            "requirement": "REQUIRED",
+            "priority": 10,
+            "userSetupAllowed": false,
+            "authenticatorFlow": false
+          },
+          {
+            "authenticator": "auth-otp-form",
+            "requirement": "REQUIRED",
+            "priority": 20,
+            "userSetupAllowed": false,
+            "authenticatorFlow": false
+          }
+        ]
+      }
+    ],
+    "requiredActions": [
+      {
+        "alias": "CONFIGURE_TOTP",
+        "name": "Configure OTP",
+        "providerId": "CONFIGURE_TOTP",
+        "enabled": true,
+        "defaultAction": true,
+        "priority": 10
+      },
+      {
+        "alias": "UPDATE_PASSWORD",
+        "name": "Update Password",
+        "providerId": "UPDATE_PASSWORD",
+        "enabled": true,
+        "defaultAction": false,
+        "priority": 30
+      },
+      {
+        "alias": "UPDATE_PROFILE",
+        "name": "Update Profile",
+        "providerId": "UPDATE_PROFILE",
+        "enabled": true,
+        "defaultAction": false,
+        "priority": 40
+      },
+      {
+        "alias": "VERIFY_EMAIL",
+        "name": "Verify Email",
+        "providerId": "VERIFY_EMAIL",
+        "enabled": false,
+        "defaultAction": false,
+        "priority": 50
+      }
+    ],
     "roles": {
       "realm": [
         {
@@ -114,9 +232,27 @@
         "clientId": "reports-frontend",
         "enabled": true,
         "publicClient": true,
-        "redirectUris": ["http://localhost:3000/*"],
-        "webOrigins": ["http://localhost:3000"],
-        "directAccessGrantsEnabled": true
+        "redirectUris": ["http://localhost:3000/*", "http://localhost:8081/*"],
+        "webOrigins": ["http://localhost:3000", "http://localhost:8081"],
+        "directAccessGrantsEnabled": false,
+        "standardFlowEnabled": true,
+        "attributes": {
+          "pkce.code.challenge.method": "S256"
+        }
+      },
+      {
+        "clientId": "bionicpro-auth",
+        "enabled": true,
+        "publicClient": false,
+        "clientAuthenticatorType": "client-secret",
+        "secret": "bionicpro-auth-secret",
+        "redirectUris": ["http://localhost:8081/*", "http://localhost:8081/login/oauth2/code/keycloak", "http://localhost:3000/*"],
+        "webOrigins": ["http://localhost:3000", "http://localhost:8081"],
+        "standardFlowEnabled": true,
+        "directAccessGrantsEnabled": false,
+        "attributes": {
+          "pkce.code.challenge.method": "S256"
+        }
       },
       {
         "clientId": "reports-api",
@@ -124,6 +260,190 @@
         "clientAuthenticatorType": "client-secret",
         "secret": "oNwoLQdvJAvRcL89SydqCWCe5ry1jMgq", 
         "bearerOnly": true
+      }
+    ],
+    "identityProviders": [
+      {
+        "alias": "yandex",
+        "displayName": "Yandex ID",
+        "providerId": "oidc",
+        "enabled": true,
+        "updateProfileFirstLoginMode": "on",
+        "trustEmail": true,
+        "storeToken": true,
+        "addReadTokenRoleOnCreate": true,
+        "authenticateByDefault": false,
+        "linkOnly": false,
+        "firstBrokerLoginFlowAlias": "first broker login",
+        "config": {
+          "clientId": "yandex-client-id",
+          "clientSecret": "yandex-client-secret",
+          "authorizationUrl": "https://oauth.yandex.ru/authorize",
+          "tokenUrl": "https://oauth.yandex.ru/token",
+          "userInfoUrl": "https://login.yandex.ru/info",
+          "logoutUrl": "",
+          "issuer": "https://oauth.yandex.ru",
+          "defaultScope": "login:email login:info login:avatar",
+          "validateSignature": "false",
+          "useJwksUrl": "false",
+          "syncMode": "IMPORT",
+          "backchannelSupported": "false",
+          "guiOrder": "1"
+        }
+      }
+    ],
+    "identityProviderMappers": [
+      {
+        "id": "yandex-email-mapper",
+        "name": "yandex-email-mapper",
+        "identityProviderAlias": "yandex",
+        "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+        "config": {
+          "syncMode": "INHERIT",
+          "claim": "default_email",
+          "user.attribute": "email"
+        }
+      },
+      {
+        "id": "yandex-firstname-mapper",
+        "name": "yandex-firstname-mapper",
+        "identityProviderAlias": "yandex",
+        "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+        "config": {
+          "syncMode": "INHERIT",
+          "claim": "first_name",
+          "user.attribute": "firstName"
+        }
+      },
+      {
+        "id": "yandex-lastname-mapper",
+        "name": "yandex-lastname-mapper",
+        "identityProviderAlias": "yandex",
+        "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+        "config": {
+          "syncMode": "INHERIT",
+          "claim": "last_name",
+          "user.attribute": "lastName"
+        }
+      },
+      {
+        "id": "yandex-role-mapper",
+        "name": "yandex-role-mapper",
+        "identityProviderAlias": "yandex",
+        "identityProviderMapper": "oidc-hardcoded-role-idp-mapper",
+        "config": {
+          "syncMode": "INHERIT",
+          "role": "prothetic_user"
+        }
+      }
+    ],
+    "userFederationProviders": [
+      {
+        "id": "openldap-provider",
+        "displayName": "OpenLDAP Regional Branch",
+        "providerName": "ldap",
+        "priority": 0,
+        "config": {
+          "enabled": "true",
+          "priority": "0",
+          "editMode": "READ_ONLY",
+          "syncRegistrations": "false",
+          "vendor": "other",
+          "usernameLDAPAttribute": "uid",
+          "rdnLDAPAttribute": "uid",
+          "uuidLDAPAttribute": "entryUUID",
+          "userObjectClasses": "inetOrgPerson, organizationalPerson",
+          "connectionUrl": "ldap://openldap:389",
+          "usersDn": "ou=People,dc=example,dc=com",
+          "authType": "simple",
+          "bindDn": "cn=admin,dc=example,dc=com",
+          "bindCredential": "adminpassword",
+          "searchScope": "1",
+          "validatePasswordPolicy": "false",
+          "trustEmail": "true",
+          "useTruststoreSpi": "ldapsOnly",
+          "connectionPooling": "true",
+          "pagination": "true",
+          "batchSizeForSync": "1000",
+          "fullSyncPeriod": "604800",
+          "changedSyncPeriod": "86400",
+          "importEnabled": "true",
+          "readTimeout": "10000",
+          "connectionTimeout": "5000"
+        }
+      }
+    ],
+    "userFederationMappers": [
+      {
+        "id": "ldap-role-mapper",
+        "name": "role-mapper",
+        "federationProviderDisplayName": "OpenLDAP Regional Branch",
+        "federationMapperType": "role-ldap-mapper",
+        "config": {
+          "roles.dn": "ou=Groups,dc=example,dc=com",
+          "role.name.ldap.attribute": "cn",
+          "role.object.classes": "groupOfNames",
+          "membership.ldap.attribute": "member",
+          "membership.attribute.type": "DN",
+          "membership.user.ldap.attribute": "uid",
+          "roles.ldap.filter": "",
+          "mode": "READ_ONLY",
+          "user.roles.retrieve.strategy": "LOAD_ROLES_BY_MEMBER_ATTRIBUTE",
+          "use.realm.roles.mapping": "true",
+          "client.id": ""
+        }
+      },
+      {
+        "id": "ldap-username-mapper",
+        "name": "username-mapper",
+        "federationProviderDisplayName": "OpenLDAP Regional Branch",
+        "federationMapperType": "user-attribute-ldap-mapper",
+        "config": {
+          "ldap.attribute": "uid",
+          "user.model.attribute": "username",
+          "is.mandatory.in.ldap": "true",
+          "read.only": "true",
+          "always.read.value.from.ldap": "true"
+        }
+      },
+      {
+        "id": "ldap-email-mapper",
+        "name": "email-mapper",
+        "federationProviderDisplayName": "OpenLDAP Regional Branch",
+        "federationMapperType": "user-attribute-ldap-mapper",
+        "config": {
+          "ldap.attribute": "mail",
+          "user.model.attribute": "email",
+          "is.mandatory.in.ldap": "true",
+          "read.only": "true",
+          "always.read.value.from.ldap": "true"
+        }
+      },
+      {
+        "id": "ldap-firstname-mapper",
+        "name": "firstname-mapper",
+        "federationProviderDisplayName": "OpenLDAP Regional Branch",
+        "federationMapperType": "user-attribute-ldap-mapper",
+        "config": {
+          "ldap.attribute": "cn",
+          "user.model.attribute": "firstName",
+          "is.mandatory.in.ldap": "false",
+          "read.only": "true",
+          "always.read.value.from.ldap": "true"
+        }
+      },
+      {
+        "id": "ldap-lastname-mapper",
+        "name": "lastname-mapper",
+        "federationProviderDisplayName": "OpenLDAP Regional Branch",
+        "federationMapperType": "user-attribute-ldap-mapper",
+        "config": {
+          "ldap.attribute": "sn",
+          "user.model.attribute": "lastName",
+          "is.mandatory.in.ldap": "false",
+          "read.only": "true",
+          "always.read.value.from.ldap": "true"
+        }
       }
     ]
   }
